@@ -65,6 +65,7 @@ var fieldMap = map[string]string{
 	"viz":       "vz",
 	"transform": "tf",
 	"structure": "st",
+	"stats":     "sa",
 	"body":      "bd",
 
 	"ds": "ds",
@@ -72,5 +73,6 @@ var fieldMap = map[string]string{
 	"vz": "vz",
 	"tf": "tf",
 	"st": "st",
+	"sa": "sa",
 	"bd": "bd",
 }

@@ -84,6 +84,13 @@ func sel(r *rev.Rev, ds, res *dataset.Dataset) bool {
 				res.Structure = ds.Structure
 			}
 		}
+	case "sa":
+		if ds.Stats != nil {
+			r.Gen--
+			if r.Gen == 0 {
+				res.Stats = ds.Stats
+			}
+		}
 	}
 
 	return r.Gen == 0
