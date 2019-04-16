@@ -7,9 +7,7 @@ import (
 	"io"
 	"io/ioutil"
 	stdlog "log"
-	"net"
 	"net/http"
-	"net/rpc"
 	"time"
 
 	"github.com/datatogether/api/apiutil"
@@ -61,7 +59,6 @@ func (s Server) Serve() (err error) {
 	mux := NewServerRoutes(s)
 	server.Handler = mux
 
-	go s.ServeRPC()
 	go s.ServeWebapp()
 
 	if namesys, err := node.GetIPFSNamesys(); err == nil {
@@ -126,30 +123,6 @@ func (s Server) Serve() (err error) {
 
 	// http.ListenAndServe will not return unless there's an error
 	return StartServer(cfg.API, server)
-}
-
-// ServeRPC checks for a configured RPC port, and registers a listner if so
-func (s Server) ServeRPC() {
-	cfg := s.Config()
-	if !cfg.RPC.Enabled || cfg.RPC.Port == 0 {
-		return
-	}
-
-	listener, err := net.Listen("tcp", fmt.Sprintf("%s:%d", LocalHostIP, cfg.RPC.Port))
-	if err != nil {
-		log.Infof("RPC listen on port %d error: %s", cfg.RPC.Port, err)
-		return
-	}
-
-	for _, rcvr := range lib.Receivers(s.Instance) {
-		if err := rpc.Register(rcvr); err != nil {
-			log.Infof("error registering RPC receiver %s: %s", rcvr.CoreRequestsName(), err.Error())
-			return
-		}
-	}
-
-	rpc.Accept(listener)
-	return
 }
 
 // HandleIPFSPath responds to IPFS Hash requests with raw data

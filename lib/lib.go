@@ -5,7 +5,6 @@ package lib
 
 import (
 	"context"
-	"encoding/gob"
 	"fmt"
 	"net"
 	"net/rpc"
@@ -46,36 +45,37 @@ var (
 // VersionNumber is the current version qri
 const VersionNumber = "0.7.4-dev"
 
-func init() {
-	// Fields like dataset.Structure.Schema contain data of arbitrary types,
-	// registering with the gob package prevents errors when sending them
-	// over net/rpc calls.
-	gob.Register([]interface{}{})
-	gob.Register(map[string]interface{}{})
+// Instance is the interface that bundles the foundational values of a
+// qri instance. Instance provides the basis for creating Method constructors,
+// which actually do qri things
+// think of instance as the "core" of the qri ecosystem
+type Instance interface {
+	// Context returns the base context this instance is using. Any resources
+	// built from this instance should inherit from this context and obey
+	// calls from the ctx.Done(), releasing any & all resources
+	Context() context.Context
+	// Teardown closes the instance by closing the base context
+	Teardown()
+	// Config returns the current configuration for this
+	Config() *config.Config
+	Node() *p2p.QriNode
+	Repo() repo.Repo
+	RPC() *rpc.Client
 }
 
-// Receivers returns a slice of CoreRequests that defines the full local
-// API of lib methods
-func Receivers(inst *Instance) []Methods {
-	node := inst.Node()
-	r := inst.Repo()
-
-	return []Methods{
-		NewDatasetRequests(node, nil),
-		NewRegistryRequests(node, nil),
-		NewLogRequests(node, nil),
-		NewExportRequests(node, nil),
-		NewPeerRequests(node, nil),
-		NewProfileMethods(inst),
-		NewConfigMethods(inst),
-		NewSearchRequests(node, nil),
-		NewRenderRequests(r, nil),
-		NewSelectionRequests(r, nil),
-	}
+// WritableInstance is an instance that can be modified
+// instances that allow config changes should implement this interface
+type WritableInstance interface {
+	// SetConfig modifies configuration details
+	SetConfig(*config.Config) error
 }
 
-// Methods is a related set of library functions
-type Methods interface {
+// ErrNotWritable is a canonical error for try to edit an instance
+// that isn't editable
+var ErrNotWritable = fmt.Errorf("this instance isn't writable")
+
+// Requests defines a set of library methods
+type Requests interface {
 	// CoreRequestsName confirms participation in the CoreRequests interface while
 	// also giving a human readable string for logging purposes
 	// TODO (b5): rename this interface to "MethodsName", or remove entirely

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/qri-io/ioes"
 	"github.com/qri-io/qri/api"
@@ -161,10 +162,25 @@ func (o *ConnectOptions) Run() (err error) {
 	// but will cause weird behaviour on config update...
 	inst := lib.NewInstanceFromConfigAndNode(&cfg, o.Node)
 
+	var wg sync.WaitGroup
+
+	if inst.Config().RPC.Enabled && inst.Config().RPC.Port != 0 {
+		wg.Add(1)
+		// Serve RPC connections on a goroutine
+		go func() {
+			lib.ServeRPC(inst)
+			wg.Done()
+		}()
+	}
+
+	wg.Add(1)
 	s := api.New(inst)
 	err = s.Serve()
 	if err != nil && err.Error() == "http: Server closed" {
-		return nil
+		err = nil
 	}
+	wg.Done()
+
+	wg.Wait()
 	return err
 }
