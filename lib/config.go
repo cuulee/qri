@@ -8,30 +8,18 @@ import (
 	"github.com/qri-io/qri/config"
 )
 
-// ConfigMethods encapsulates changes to a qri configuration
-type ConfigMethods interface {
-	// CoreRequestsName specifies participation in the methods interface
-	// TODO (b5): update func name when change happens
-	CoreRequestsName() string
-	// GetConfig returns the Config, or one of the specified fields of the Config,
-	// as a slice of bytes the bytes can be formatted as json, concise json, or yaml
-	GetConfig(p *GetConfigParams, res *[]byte) (err error)
-	// SetConfig validates, updates and saves the config
-	SetConfig(update *config.Config, set *bool) (err error)
-}
-
 // NewConfigMethods creates a configuration handle from an instance
-func NewConfigMethods(inst *Instance) ConfigMethods {
-	return configMethods{inst: inst}
+func NewConfigMethods(inst *Instance) *ConfigMethods {
+	return &ConfigMethods{inst: inst}
 }
 
-// configMethods is the private implementation of ConfigMethods
-type configMethods struct {
+// ConfigMethods is the private implementation of ConfigMethods
+type ConfigMethods struct {
 	inst *Instance
 }
 
 // CoreRequestsName specifies this is a configuration handle
-func (m configMethods) CoreRequestsName() string { return "config" }
+func (m ConfigMethods) CoreRequestsName() string { return "config" }
 
 // GetConfigParams are the params needed to format/specify the fields in bytes
 // returned from the GetConfig function
@@ -44,7 +32,7 @@ type GetConfigParams struct {
 
 // GetConfig returns the Config, or one of the specified fields of the Config,
 // as a slice of bytes the bytes can be formatted as json, concise json, or yaml
-func (m configMethods) GetConfig(p *GetConfigParams, res *[]byte) (err error) {
+func (m ConfigMethods) GetConfig(p *GetConfigParams, res *[]byte) (err error) {
 	if m.inst.rpc != nil {
 		return m.inst.rpc.Call("ConfigMethods.GetConfig", p, res)
 	}
@@ -87,7 +75,7 @@ func (m configMethods) GetConfig(p *GetConfigParams, res *[]byte) (err error) {
 }
 
 // SetConfig validates, updates and saves the config
-func (m configMethods) SetConfig(update *config.Config, set *bool) (err error) {
+func (m ConfigMethods) SetConfig(update *config.Config, set *bool) (err error) {
 	if m.inst.rpc != nil {
 		return m.inst.rpc.Call("ConfigMethods.SetConfig", update, set)
 	}

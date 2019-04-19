@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	golog "github.com/ipfs/go-log"
 	homedir "github.com/mitchellh/go-homedir"
@@ -45,37 +46,8 @@ var (
 // VersionNumber is the current version qri
 const VersionNumber = "0.7.4-dev"
 
-// Instance is the interface that bundles the foundational values of a
-// qri instance. Instance provides the basis for creating Method constructors,
-// which actually do qri things
-// think of instance as the "core" of the qri ecosystem
-type Instance interface {
-	// Context returns the base context this instance is using. Any resources
-	// built from this instance should inherit from this context and obey
-	// calls from the ctx.Done(), releasing any & all resources
-	Context() context.Context
-	// Teardown closes the instance by closing the base context
-	Teardown()
-	// Config returns the current configuration for this
-	Config() *config.Config
-	Node() *p2p.QriNode
-	Repo() repo.Repo
-	RPC() *rpc.Client
-}
-
-// WritableInstance is an instance that can be modified
-// instances that allow config changes should implement this interface
-type WritableInstance interface {
-	// SetConfig modifies configuration details
-	SetConfig(*config.Config) error
-}
-
-// ErrNotWritable is a canonical error for try to edit an instance
-// that isn't editable
-var ErrNotWritable = fmt.Errorf("this instance isn't writable")
-
-// Requests defines a set of library methods
-type Requests interface {
+// Methods is a related set of library functions
+type Methods interface {
 	// CoreRequestsName confirms participation in the CoreRequests interface while
 	// also giving a human readable string for logging purposes
 	// TODO (b5): rename this interface to "MethodsName", or remove entirely
@@ -261,6 +233,7 @@ func NewInstance(opts ...Option) (qri *Instance, err error) {
 
 	ctx, teardown := context.WithCancel(o.Ctx)
 	inst := &Instance{
+		lock:     sync.Mutex{},
 		ctx:      ctx,
 		teardown: teardown,
 		cfg:      cfg,
@@ -301,7 +274,7 @@ func NewInstance(opts ...Option) (qri *Instance, err error) {
 		qfssetter.SetFilesystem(inst.qfs)
 	}
 
-	if inst.node, err = p2p.NewQriNode(inst.repo, cfg.P2P); err != nil {
+	if inst.node, err = p2p.NewQriNode(inst.ctx, inst.repo, cfg.P2P); err != nil {
 		return
 	}
 	inst.node.LocalStreams = o.Streams
@@ -405,10 +378,12 @@ func NewInstanceFromConfigAndNode(cfg *config.Config, node *p2p.QriNode) *Instan
 // contain qri business logic. Think of instance as the "core" of the qri
 // ecosystem. Create an Instance pointer with NewInstance
 type Instance struct {
+	lock     sync.Mutex
 	ctx      context.Context
 	teardown context.CancelFunc
 
-	cfg *config.Config
+	cfg        *config.Config
+	cfgChanges []chan ConfigChange
 
 	streams  ioes.IOStreams
 	store    cafs.Filestore
@@ -427,11 +402,15 @@ func (inst *Instance) Context() context.Context {
 
 // Config provides methods for manipulating Qri configuration
 func (inst *Instance) Config() *config.Config {
+	inst.lock.Lock()
+	defer inst.lock.Unlock()
 	return inst.cfg
 }
 
 // ChangeConfig implements the ConfigSetter interface
 func (inst *Instance) ChangeConfig(cfg *config.Config) (err error) {
+	inst.lock.Lock()
+	defer inst.lock.Unlock()
 
 	if path := inst.cfg.Path(); path != "" {
 		if err = cfg.WriteToFile(path); err != nil {
@@ -439,8 +418,33 @@ func (inst *Instance) ChangeConfig(cfg *config.Config) (err error) {
 		}
 	}
 
+	change := ConfigChange{
+		Prev: inst.cfg.Copy(),
+		New:  cfg.Copy(),
+	}
 	inst.cfg = cfg
+
+	for _, ch := range inst.cfgChanges {
+		go func(ch chan ConfigChange) {
+			ch <- change
+		}(ch)
+	}
+
 	return nil
+}
+
+// ConfigChange describes a transition in change state
+type ConfigChange struct {
+	Prev, New *config.Config
+}
+
+// ConfigChanges provides a channel to listen for configuration changes
+func (inst *Instance) ConfigChanges() <-chan ConfigChange {
+	inst.lock.Lock()
+	defer inst.lock.Unlock()
+	changes := make(chan ConfigChange)
+	inst.cfgChanges = append(inst.cfgChanges, changes)
+	return changes
 }
 
 // Node accesses the instance qri node if one exists

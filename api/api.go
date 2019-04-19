@@ -8,7 +8,6 @@ import (
 	"io/ioutil"
 	stdlog "log"
 	"net/http"
-	"time"
 
 	"github.com/datatogether/api/apiutil"
 	golog "github.com/ipfs/go-log"
@@ -45,23 +44,18 @@ func New(inst *lib.Instance) (s Server) {
 	return Server{Instance: inst}
 }
 
-// Serve starts the server. It will block while the server is running
-func (s Server) Serve() (err error) {
+// ServeHTTP starts the server. It will block while the server is running
+func (s Server) ServeHTTP(ctx context.Context) (err error) {
 	node := s.Node()
 	cfg := s.Config()
 
-	if err = node.GoOnline(); err != nil {
-		fmt.Println("serving error", cfg.P2P.Enabled)
-		return
+	server := &http.Server{
+		Handler: NewServerRoutes(s),
 	}
-
-	server := &http.Server{}
-	mux := NewServerRoutes(s)
-	server.Handler = mux
 
 	go s.ServeWebapp()
 
-	if namesys, err := node.GetIPFSNamesys(); err == nil {
+	if namesys, err := node.GetIPFSNamesys(); err == nil && namesys != nil {
 		if pinner, ok := node.Repo.Store().(cafs.Pinner); ok {
 
 			go func() {
@@ -98,28 +92,14 @@ func (s Server) Serve() (err error) {
 					}
 				}
 			}()
-
 		}
 	}
 
-	info := "\n📡  Success! You are now connected to the d.web. Here's your connection details:\n"
-	info += cfg.SummaryString()
-	info += "IPFS Addresses:"
-	for _, a := range node.EncapsulatedAddresses() {
-		info = fmt.Sprintf("%s\n  %s", info, a.String())
-	}
-	info += "\n\n"
-
-	node.LocalStreams.Print(info)
-
-	if cfg.API.DisconnectAfter != 0 {
-		log.Infof("disconnecting after %d seconds", cfg.API.DisconnectAfter)
-		go func(s *http.Server, t int) {
-			<-time.After(time.Second * time.Duration(t))
-			log.Infof("disconnecting")
-			s.Close()
-		}(server, cfg.API.DisconnectAfter)
-	}
+	go func() {
+		<-ctx.Done()
+		// TODO (b5) - not sure this is the right pattern for http shutdown
+		server.Shutdown(s.Context())
+	}()
 
 	// http.ListenAndServe will not return unless there's an error
 	return StartServer(cfg.API, server)

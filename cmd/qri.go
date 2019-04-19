@@ -247,7 +247,7 @@ func (o *QriOptions) RenderRequests() (*lib.RenderRequests, error) {
 }
 
 // ConfigMethods generates a lib.ConfigMethods from internal state
-func (o *QriOptions) ConfigMethods() (m lib.ConfigMethods, err error) {
+func (o *QriOptions) ConfigMethods() (m *lib.ConfigMethods, err error) {
 	if err = o.Init(); err != nil {
 		return
 	}

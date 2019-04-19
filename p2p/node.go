@@ -90,14 +90,14 @@ var _ p2ptest.NodeMakerFunc = NewTestableQriNode
 
 // NewTestableQriNode creates a new node, as a TestablePeerNode, usable by testing utilities.
 func NewTestableQriNode(r repo.Repo, p2pconf *config.P2P) (p2ptest.TestablePeerNode, error) {
-	return NewQriNode(r, p2pconf)
+	return NewQriNode(context.Background(), r, p2pconf)
 }
 
 // NewQriNode creates a new node from a configuration. To get a fully connected
 // node that's searching for peers call:
 // n, _ := NewQriNode(r, cfg)
 // n.GoOnline()
-func NewQriNode(r repo.Repo, p2pconf *config.P2P) (node *QriNode, err error) {
+func NewQriNode(ctx context.Context, r repo.Repo, p2pconf *config.P2P) (node *QriNode, err error) {
 	pid, err := p2pconf.DecodePeerID()
 	if err != nil {
 		return nil, fmt.Errorf("error decoding peer id: %s", err.Error())
@@ -107,7 +107,7 @@ func NewQriNode(r repo.Repo, p2pconf *config.P2P) (node *QriNode, err error) {
 		ID:       pid,
 		cfg:      p2pconf,
 		Repo:     r,
-		ctx:      context.Background(),
+		ctx:      ctx,
 		msgState: &sync.Map{},
 		msgChan:  make(chan Message),
 		// Make sure we always have proper IOStreams, this can be set
@@ -136,13 +136,20 @@ func (n *QriNode) setHost(h host.Host) {
 	n.host = h
 }
 
-// GoOnline puts QriNode on the distributed web, ensuring there's an active peer-2-peer host
-// participating in a peer-2-peer network, and kicks off requests to connect to known bootstrap
-// peers that support the QriProtocol
-func (n *QriNode) GoOnline() (err error) {
+// GoOnline puts QriNode on the distributed web, ensuring there's an active p2p
+// host participating in a peer-2-peer network, and kicks off requests to
+// connect to known bootstrap peers that support the QriProtocol
+// stop the p2p connection by canceling the passed-in context
+func (n *QriNode) GoOnline(ctx context.Context) (err error) {
+	log.Errorf("p2p going online")
 	if !n.cfg.Enabled {
 		return fmt.Errorf("p2p connection is disabled")
 	}
+
+	go func() {
+		<-ctx.Done()
+		n.Online = false
+	}()
 
 	if n.Online {
 		return nil
@@ -151,11 +158,13 @@ func (n *QriNode) GoOnline() (err error) {
 	// node, it has built-in p2p, overlay the qri protocol
 	// on the ipfs node's p2p connections.
 	if ipfsfs, ok := n.Repo.Store().(*ipfs_filestore.Filestore); ok {
-		if !ipfsfs.Online() {
-			if err := ipfsfs.GoOnline(); err != nil {
-				return err
-			}
+		// if !ipfsfs.Online() {
+		log.Errorf("connecting IPFS")
+		if err := ipfsfs.GoOnline(ctx); err != nil {
+			log.Error(err)
+			return err
 		}
+		// }
 
 		ipfsnode := ipfsfs.Node()
 		if ipfsnode.PeerHost != nil {
@@ -167,8 +176,9 @@ func (n *QriNode) GoOnline() (err error) {
 		}
 	} else if n.host == nil {
 		ps := pstoremem.NewPeerstore()
-		n.host, err = makeBasicHost(n.ctx, ps, n.cfg)
+		n.host, err = makeBasicHost(ctx, ps, n.cfg)
 		if err != nil {
+			log.Error(err.Error())
 			return fmt.Errorf("error creating host: %s", err.Error())
 		}
 	}
@@ -203,7 +213,7 @@ func (n *QriNode) GoOnline() (err error) {
 	}
 
 	n.Online = true
-	go n.echoMessages()
+	go n.echoMessages(ctx)
 
 	return n.startOnlineServices()
 }
@@ -236,11 +246,15 @@ func (n *QriNode) ReceiveMessages() chan Message {
 	return r
 }
 
-func (n *QriNode) echoMessages() {
+func (n *QriNode) echoMessages(ctx context.Context) {
 	for {
-		msg := <-n.msgChan
-		for _, r := range n.receivers {
-			r <- msg
+		select {
+		case msg := <-n.msgChan:
+			for _, r := range n.receivers {
+				r <- msg
+			}
+		case <-ctx.Done():
+			return
 		}
 	}
 }
@@ -307,13 +321,6 @@ func (n *QriNode) Context() context.Context {
 	}
 	return n.ctx
 }
-
-// TODO - finish. We need a proper termination & cleanup process
-// func (n *QriNode) Close() error {
-// 	if node, err := n.IPFSNode(); err == nil {
-// 		return node.Close()
-// 	}
-// }
 
 // makeBasicHost creates a LibP2P host from a NodeCfg
 func makeBasicHost(ctx context.Context, ps pstore.Peerstore, p2pconf *config.P2P) (host.Host, error) {

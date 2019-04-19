@@ -1,18 +1,18 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
-	"sync"
+	"time"
 
 	"github.com/qri-io/ioes"
 	"github.com/qri-io/qri/api"
-	"github.com/qri-io/qri/config"
 	"github.com/qri-io/qri/lib"
-	"github.com/qri-io/qri/p2p"
 	"github.com/spf13/cobra"
 )
 
-// NewConnectCommand creates a new `qri connect` cobra command for connecting to the d.web, local api, rpc server, and webapp
+// NewConnectCommand creates a new `qri connect` cobra command for connecting to
+// the d.web, local api, rpc server, and webapp
 func NewConnectCommand(f Factory, ioStreams ioes.IOStreams) *cobra.Command {
 	o := ConnectOptions{IOStreams: ioStreams}
 	cmd := &cobra.Command{
@@ -49,9 +49,7 @@ peers & swapping data.`,
 	cmd.Flags().BoolVarP(&o.DisableAPI, "disable-api", "", false, "disables api, overrides the api-port flag")
 	cmd.Flags().BoolVarP(&o.DisableRPC, "disable-rpc", "", false, "disables rpc, overrides the rpc-port flag")
 	cmd.Flags().BoolVarP(&o.DisableWebapp, "disable-webapp", "", false, "disables webapp, overrides the webapp-port flag")
-	cmd.Flags().BoolVarP(&o.DisableP2P, "disable-p2p", "", false, "disables webapp, overrides the webapp-port flag")
-	// TODO - not yet supported
-	// cmd.Flags().BoolVarP(&o.DisableP2P, "disable-p2p", "", false, "disable peer-2-peer networking")
+	cmd.Flags().BoolVarP(&o.DisableP2P, "disable-p2p", "", false, "disable peer-2-peer networking")
 
 	cmd.Flags().BoolVarP(&o.Setup, "setup", "", false, "run setup if necessary, reading options from environment variables")
 	cmd.Flags().BoolVarP(&o.ReadOnly, "read-only", "", false, "run qri in read-only mode, limits the api endpoints")
@@ -65,6 +63,12 @@ peers & swapping data.`,
 // ConnectOptions encapsulates state for the connect command
 type ConnectOptions struct {
 	ioes.IOStreams
+	inst *lib.Instance
+
+	stopRPC  context.CancelFunc
+	stopAPI  context.CancelFunc
+	stopP2P  context.CancelFunc
+	stopCron context.CancelFunc
 
 	APIPort         int
 	RPCPort         int
@@ -81,9 +85,6 @@ type ConnectOptions struct {
 	ReadOnly            bool
 	RemoteMode          bool
 	RemoteAcceptSizeMax int64
-
-	Node   *p2p.QriNode
-	Config *config.Config
 }
 
 // Complete adds any missing configuration that can only be added just before calling Run
@@ -110,17 +111,13 @@ func (o *ConnectOptions) Complete(f Factory, args []string) (err error) {
 	if err = f.Init(); err != nil {
 		return err
 	}
-	o.Node, err = f.ConnectionNode()
-	if err != nil {
-		return fmt.Errorf("%s, is `qri connect` already running?", err)
-	}
-	o.Config, err = f.Config()
+	o.inst = f.Instance()
 	return
 }
 
 // Run executes the connect command with currently configured state
 func (o *ConnectOptions) Run() (err error) {
-	cfg := *o.Config
+	cfg := o.inst.Config().Copy()
 
 	if o.APIPort != 0 {
 		cfg.API.Port = o.APIPort
@@ -142,45 +139,137 @@ func (o *ConnectOptions) Run() (err error) {
 	if o.RemoteMode {
 		cfg.API.RemoteMode = true
 	}
-	if o.DisableP2P {
-		cfg.P2P.Enabled = false
-	}
-	if o.DisableAPI {
-		cfg.API.Enabled = false
-	}
-	if o.DisableRPC {
-		cfg.RPC.Enabled = false
-	}
-	if o.DisableWebapp {
-		cfg.Webapp.Enabled = false
-	}
 
 	cfg.API.RemoteAcceptSizeMax = o.RemoteAcceptSizeMax
 
-	// TODO (b5) - we should instead embed an Instance in ConnectOptions,
-	// that'll require doing config manipulation *before* lib.NewInstance is called
-	// but will cause weird behaviour on config update...
-	inst := lib.NewInstanceFromConfigAndNode(&cfg, o.Node)
-
-	var wg sync.WaitGroup
-
-	if inst.Config().RPC.Enabled && inst.Config().RPC.Port != 0 {
-		wg.Add(1)
-		// Serve RPC connections on a goroutine
-		go func() {
-			lib.ServeRPC(inst)
-			wg.Done()
-		}()
+	if err := o.inst.ChangeConfig(cfg); err != nil {
+		log.Error(err)
 	}
 
-	wg.Add(1)
-	s := api.New(inst)
-	err = s.Serve()
-	if err != nil && err.Error() == "http: Server closed" {
-		err = nil
-	}
-	wg.Done()
+	o.maybeStartRPC()
+	o.maybeStartP2P()
+	o.maybeStartAPI()
+	o.maybeStartCron()
+	o.maybeTimeoutProcess()
 
-	wg.Wait()
-	return err
+	go func() {
+		for change := range o.inst.ConfigChanges() {
+			cfg := change.New
+
+			if !cfg.RPC.Enabled && o.stopRPC != nil {
+				log.Info("stopping RPC")
+				o.stopRPC()
+				o.stopRPC = nil
+			} else if cfg.RPC.Enabled && o.stopRPC == nil {
+				o.maybeStartRPC()
+			}
+
+			if !cfg.P2P.Enabled && o.stopP2P != nil {
+				log.Info("stopping P2P")
+				o.stopP2P()
+				o.stopP2P = nil
+			} else if cfg.P2P.Enabled && o.stopP2P == nil {
+				o.maybeStartP2P()
+			}
+
+			if !cfg.API.Enabled && o.stopAPI != nil {
+				log.Info("stopping API")
+				o.stopAPI()
+				o.stopAPI = nil
+			} else if cfg.API.Enabled && o.stopAPI == nil {
+				o.maybeStartAPI()
+			}
+
+			// TODO (b5): wire up cron checking once cron config exists
+		}
+	}()
+
+	<-o.inst.Context().Done()
+	return
+}
+
+func (o *ConnectOptions) maybeStartRPC() {
+	if o.DisableRPC {
+		log.Info("RPC is disabled by command-line flag")
+		return
+	}
+	if !o.inst.Config().RPC.Enabled || o.inst.Config().RPC.Port == 0 {
+		return
+	}
+
+	var ctx context.Context
+	ctx, o.stopRPC = context.WithCancel(o.inst.Context())
+
+	go func() {
+		if err := lib.ServeRPC(ctx, o.inst); err != nil {
+			log.Errorf("RPC closed: %s", err)
+		}
+	}()
+}
+
+func (o *ConnectOptions) maybeStartAPI() {
+	if o.DisableAPI {
+		log.Info("API is disabled by command-line flag")
+		return
+	}
+	if !o.inst.Config().API.Enabled || o.inst.Config().API.Port == 0 {
+		return
+	}
+
+	var ctx context.Context
+	ctx, o.stopAPI = context.WithCancel(o.inst.Context())
+
+	go func() {
+		s := api.New(o.inst)
+		if err := s.ServeHTTP(ctx); err != nil && err.Error() != "http: Server closed" {
+			log.Errorf("API closed: %s", err)
+		}
+	}()
+}
+
+func (o *ConnectOptions) maybeStartP2P() {
+	if o.DisableP2P {
+		log.Info("P2P is disabled by command-line flag")
+		return
+	}
+	if !o.inst.Config().P2P.Enabled {
+		return
+	}
+	log.Error("connecting P2P")
+
+	node := o.inst.Node()
+	cfg := o.inst.Config()
+
+	var ctx context.Context
+	ctx, o.stopP2P = context.WithCancel(o.inst.Context())
+
+	if err := node.GoOnline(ctx); err != nil {
+		fmt.Println("serving error", err)
+		return
+	}
+
+	info := "\n📡  Success! You are now connected to the d.web. Here's your connection details:\n"
+	info += cfg.SummaryString()
+	info += "IPFS Addresses:"
+	for _, a := range node.EncapsulatedAddresses() {
+		info = fmt.Sprintf("%s\n  %s", info, a.String())
+	}
+	info += "\n\n"
+
+	node.LocalStreams.Print(info)
+}
+
+func (o *ConnectOptions) maybeStartCron() {
+	// TODO (b5): implement cron
+}
+
+func (o *ConnectOptions) maybeTimeoutProcess() {
+	if o.DisconnectAfter != 0 {
+		log.Infof("disconnecting after %d seconds", o.DisconnectAfter)
+		go func(inst *lib.Instance, t int) {
+			<-time.After(time.Second * time.Duration(t))
+			log.Infof("disconnecting")
+			o.inst.Teardown()
+		}(o.inst, o.DisconnectAfter)
+	}
 }

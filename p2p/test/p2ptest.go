@@ -25,7 +25,7 @@ type TestablePeerNode interface {
 	Host() host.Host
 	SimplePeerInfo() pstore.PeerInfo
 	UpgradeToQriConnection(pstore.PeerInfo) error
-	GoOnline() error
+	GoOnline(context.Context) error
 }
 
 // NodeMakerFunc is a function that constructs a Node from a Repo and options.
@@ -124,7 +124,7 @@ func NewAvailableTestNode(r repo.Repo, f *TestNodeFactory) (TestablePeerNode, er
 	if err != nil {
 		return nil, fmt.Errorf("error creating test node: %s", err.Error())
 	}
-	if err := node.GoOnline(); err != nil {
+	if err := node.GoOnline(context.Background()); err != nil {
 		return nil, fmt.Errorf("errror connecting: %s", err.Error())
 	}
 	node.Host().Peerstore().AddPubKey(info.PeerID, info.PubKey)

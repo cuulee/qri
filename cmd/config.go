@@ -124,7 +124,7 @@ type ConfigOptions struct {
 	Output          string
 
 	inst           *lib.Instance
-	ConfigMethods  lib.ConfigMethods
+	ConfigMethods  *lib.ConfigMethods
 	ProfileMethods lib.ProfileMethods
 }
 
@@ -182,7 +182,8 @@ func (o *ConfigOptions) Set(args []string) (err error) {
 		"profile.thumb":  true,
 	}
 
-	profile := o.inst.Config().Profile
+	cfg := o.inst.Config().Copy()
+	profile := cfg.Profile
 	profileChanged := false
 
 	for i := 0; i < len(args)-1; i = i + 2 {
@@ -205,13 +206,13 @@ func (o *ConfigOptions) Set(args []string) (err error) {
 			profileChanged = true
 		} else {
 			// TODO (b5): I think this'll resule in configuration not getting set. should investigate
-			if err = o.inst.Config().Set(path, value); err != nil {
+			if err = cfg.Set(path, value); err != nil {
 				return err
 			}
 		}
 	}
 	var ok bool
-	if err = o.ConfigMethods.SetConfig(o.inst.Config(), &ok); err != nil {
+	if err = o.ConfigMethods.SetConfig(cfg, &ok); err != nil {
 		return err
 	}
 	if profileChanged {

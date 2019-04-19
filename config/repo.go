@@ -8,7 +8,7 @@ import (
 
 // Repo configures a qri repo
 type Repo struct {
-	Middleware []string `json:"middleware"`
+	Middleware []string `json:"middleware,omitempty"`
 	Type       string   `json:"type"`
 	Path       string   `json:"path,omitempty"`
 }
@@ -28,7 +28,7 @@ func (cfg Repo) Validate() error {
     "title": "Repo",
     "description": "Config for the qri repository",
     "type": "object",
-    "required": ["middleware", "type"],
+    "required": ["type"],
     "properties": {
       "middleware": {
         "description": "Middleware packages that need to be applied to the repo",

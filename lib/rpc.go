@@ -1,6 +1,7 @@
 package lib
 
 import (
+	"context"
 	"encoding/gob"
 	"fmt"
 	"net"
@@ -20,11 +21,11 @@ func init() {
 
 // Receivers returns a slice of CoreRequests that defines the full local
 // API of lib methods
-func Receivers(inst Instance) []Requests {
+func Receivers(inst *Instance) []Methods {
 	node := inst.Node()
 	r := inst.Repo()
 
-	return []Requests{
+	return []Methods{
 		NewDatasetRequests(node, nil),
 		NewRegistryRequests(node, nil),
 		NewLogRequests(node, nil),
@@ -43,7 +44,8 @@ func Receivers(inst Instance) []Requests {
 var ErrRPCDisabled = fmt.Errorf("RPC is disabled")
 
 // ServeRPC creates a server that listens for remote procedure call operations
-func ServeRPC(inst Instance) (err error) {
+// it listens on the
+func ServeRPC(ctx context.Context, inst *Instance) (err error) {
 	cfg := inst.Config()
 	if !cfg.RPC.Enabled || cfg.RPC.Port == 0 {
 		return ErrRPCDisabled
@@ -65,7 +67,7 @@ func ServeRPC(inst Instance) (err error) {
 	errs := make(chan error)
 	// close the listener when the host context closes
 	go func(l net.Listener) {
-		<-inst.Context().Done()
+		<-ctx.Done()
 		errs <- l.Close()
 	}(listener)
 
