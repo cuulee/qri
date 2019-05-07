@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"fmt"
+
 	util "github.com/datatogether/api/apiutil"
 	"github.com/qri-io/ioes"
 	"github.com/qri-io/qri/lib"
@@ -100,9 +102,12 @@ func (o *LogOptions) Run() error {
 		return err
 	}
 
-	for _, ref := range refs {
-		printSuccess(o.Out, "%s - %s\n\t%s\n", ref.Dataset.Commit.Timestamp.Format("Jan _2 15:04:05"), ref.Path, ref.Dataset.Commit.Title)
+	items := make([]fmt.Stringer, len(refs))
+	for i, r := range refs {
+		items[i] = logStringer(r)
 	}
+
+	return printItems(o.Out, items)
 
 	// outformat := cmd.Flag("format").Value.String()
 	// switch outformat {
@@ -117,5 +122,5 @@ func (o *LogOptions) Run() error {
 	// default:
 	//  ErrExit(o.ErrOut, fmt.Errorf("unrecognized format: %s", outformat))
 	// }
-	return nil
+	// return nil
 }
